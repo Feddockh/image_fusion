@@ -16,8 +16,8 @@ from FoundationStereo.core.foundation_stereo import *
 # Define file paths and parameters
 # ---------------------------
 # Image paths (adjust as needed)
-left_image_path = 'data/firefly_left/1739373925_363698530_firefly_left.tif'
-right_image_path = 'data/firefly_right/1739373925_363698530_firefly_right.tif'
+left_image_path = 'data/1739373925_363698530_firefly_left.tif'
+right_image_path = 'data/1739373925_363698530_firefly_right.tif'
 
 # Calibration and image parameters
 image_width = 1440
