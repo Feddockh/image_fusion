@@ -49,14 +49,14 @@ def main():
     parser = argparse.ArgumentParser(
         description="StereoSGBM based disparity and 3D reconstruction demo with optional arguments."
     )
-    parser.add_argument('--left_file', type=str, default='data/assets/left_img_rectified.png',
+    parser.add_argument('--left_file', type=str, default='data/firefly_assets/left_img_rectified.png',
                         help="Path to the left image")
-    parser.add_argument('--right_file', type=str, default='data/assets/right_img_rectified.png',
+    parser.add_argument('--right_file', type=str, default='data/firefly_assets/right_img_rectified.png',
                         help="Path to the right image")
-    parser.add_argument('--intrinsic_file', type=str, default='data/assets/K.txt',
+    parser.add_argument('--intrinsic_file', type=str, default='data/firefly_assets/K.txt',
                         help="Path to the intrinsic calibration file. "
                              "File should contain 9 intrinsic parameters in first line and baseline in second line.")
-    parser.add_argument('--out_dir', type=str, default='output',
+    parser.add_argument('--out_dir', type=str, default='output/default',
                         help="Directory to save output files")
     parser.add_argument('--max_distance', type=float, default=3000,
                         help="Max distance (in depth units) to filter point cloud")

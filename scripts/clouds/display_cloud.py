@@ -29,7 +29,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Load and display a point cloud from a .ply file using Open3D."
     )
-    parser.add_argument('--ply_file', type=str, default='output/FoundationStereo/cloud_denoise.ply',
+    parser.add_argument('--ply_file', type=str, default='output/foundationstereo/cloud_denoise.ply',
                         help="Path to the .ply point cloud file")
     args = parser.parse_args()
     
