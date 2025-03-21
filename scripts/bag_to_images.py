@@ -25,13 +25,13 @@ from ament_index_python.packages import get_package_share_directory
 # TODO: Give ability to pass folder and then run all rosbags within that folder sequentially
 
 # Be sure to run this code using the sim time parameter
-# ros2 run image_fusion director_time_synchronizer --ros-args -p use_sim_time:=True
+# ros2 run image_fusion director_time_synchronizer.py --ros-args -p use_sim_time:=True
 # And be sure to run the ros2 bag play with the clock option
 # ros2 bag play /path/to/bag.bag --clock
 # If you want to enable demosaicing for the Ximea camera, use the following command:
-# ros2 run image_fusion director_time_synchronizer --ros-args -p use_sim_time:=True -p demosaic:=True
+# ros2 run image_fusion director_time_synchronizer.py --ros-args -p use_sim_time:=True -p demosaic:=True
 # To run with the rectification option, use the following command:
-# ros2 run image_fusion director_time_synchronizer --ros-args -p use_sim_time:=True -p rectify:=True
+# ros2 run image_fusion director_time_synchronizer.py --ros-args -p use_sim_time:=True -p demosaic:=True -p rectify:=True
 
 class DirectorRequest:
     def __init__(self, id: int, timestamp: Time, validity_s: float, camera_names: list) -> None:

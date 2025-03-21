@@ -2,6 +2,7 @@
 
 import cv2
 import numpy as np
+from fpdf import FPDF
 
 def main():
     # ---------------------------------------------------
@@ -19,8 +20,8 @@ def main():
 
     # Physical sizes in meters (or any consistent unit)
     # The ratio markerLength / squareLength must match your real board
-    squareLength = 0.04   # e.g. 4 cm
-    markerLength = 0.03   # e.g. 3 cm
+    squareLength = 0.04   # e.g. 40 mm
+    markerLength = 0.03   # e.g. 30 mm
 
     # ---------------------------------------------------
     # 2) CREATE AND SAVE SYNTHETIC BOARD IMAGE
@@ -33,13 +34,28 @@ def main():
         dictionary
     )
     # Draw the board at a chosen resolution (pixels x pixels)
-    board_size = 1000
-    board_img = board.generateImage((board_size, board_size))
+    board_size = 100
+    board_img = board.generateImage((board_size*squaresX, board_size*squaresY))
 
     # Save for inspection
     out_filename = "charuco_test.png"
     cv2.imwrite(out_filename, board_img)
     print(f"[INFO] Saved synthetic board image as {out_filename}")
+
+    # Create an A4 PDF and place the image on it
+    page_height_mm = 210
+    page_width_mm = 297
+    pdf = FPDF(orientation='landscape', unit='mm', format=(page_height_mm, page_width_mm))
+    pdf.add_page()
+
+    # Center the board on the 8.5x11 inch page
+    board_width_mm = (squareLength * 1000) * squaresX  # Convert to mm
+    board_height_mm = (squareLength * 1000) * squaresY  # Convert to mm
+    x_offset = (page_width_mm - board_width_mm) / 2
+    y_offset = (page_height_mm - board_height_mm) / 2
+    pdf.image(out_filename, x=x_offset, y=y_offset, w=board_width_mm, h=board_height_mm)
+    pdf.output(f"charuco_{page_width_mm}_{page_height_mm}_{int(squareLength*1000)}_{int(markerLength*1000)}_5X5.pdf")
+    print("[INFO] Generated 8x11 inch PDF as charuco_test.pdf")
 
     # Optionally show the board
     cv2.imshow("Synthetic Charuco Board", board_img)

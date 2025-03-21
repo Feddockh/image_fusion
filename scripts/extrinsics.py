@@ -3,7 +3,7 @@
 import cv2
 import numpy as np
 import argparse
-from utils import load_camera_params
+from utils import load_camera_params, load_image_pairs
 
 
 def compute_relative_transform(rvec1, tvec1, rvec2, tvec2):
@@ -27,7 +27,7 @@ def compute_relative_transform(rvec1, tvec1, rvec2, tvec2):
 def detect_charuco_board_pose(image, board: cv2.aruco.Board, 
                               params: cv2.aruco.DetectorParameters,
                               dictionary: cv2.aruco.Dictionary,
-                              camera_matrix, dist_coeffs):
+                              camera_matrix, dist_coeffs, camera_name='Camera 0'):
     """
     Detect an ChAruCo GridBoard in the given image and estimate its pose.
 
@@ -53,6 +53,11 @@ def detect_charuco_board_pose(image, board: cv2.aruco.Board,
     marker_corners, marker_ids, _ = cv2.aruco.detectMarkers(image, dictionary, parameters=params)
 
     if marker_ids is not None and len(marker_ids) > 0:
+
+        # # Sort detected markers by ID so we have a consistent order (important for averaging relative transformations)
+        # sorted_indices = np.argsort(marker_ids.ravel())
+        # marker_ids = marker_ids[sorted_indices]
+        # marker_corners = [marker_corners[i] for i in sorted_indices]
         print(f"[DEBUG] Detected {len(marker_ids)} markers with IDs:", marker_ids.ravel())
 
         # Interpolate Charuco corners
@@ -69,10 +74,6 @@ def detect_charuco_board_pose(image, board: cv2.aruco.Board,
                 corner_int = (int(corner[0][0]), int(corner[0][1]))
                 cv2.circle(debug_img, corner_int, 5, (0, 255, 0), -1)
 
-            cv2.imshow("Detected Charuco Corners", debug_img)
-            cv2.waitKey(0)
-            cv2.destroyAllWindows()
-
             # If enough corners are found, estimate the pose
             if charuco_retval:
                 retval, rvec, tvec = cv2.aruco.estimatePoseCharucoBoard(charuco_corners, charuco_ids, board, camera_matrix, dist_coeffs, None, None)
@@ -80,9 +81,7 @@ def detect_charuco_board_pose(image, board: cv2.aruco.Board,
                 # If pose estimation is successful, draw the axis
                 if retval:
                     cv2.drawFrameAxes(debug_img, camera_matrix, dist_coeffs, rvec, tvec, length=0.1, thickness=15)
-                    cv2.imshow("Detected Axis", debug_img)
-                    cv2.waitKey(0)
-                    cv2.destroyAllWindows()
+                    cv2.imshow(f"Detected Charuco Board Pose {camera_name}", debug_img)
 
                 return rvec, tvec
         
@@ -91,11 +90,12 @@ def detect_charuco_board_pose(image, board: cv2.aruco.Board,
 
 def main():
     # Define image and calibration file paths
-    img0_path   = 'image_data/firefly_left/1741990075_217062601_rect_firefly_left.png'
-    # img0_path   = 'charuco_test.png'
-    img1_path   = 'image_data/ximea/675/1741990075_217062601_rect_ximea_675.png'
     calib0_path = 'src/image_fusion/calibration_data/firefly_left.yaml'
     calib1_path = 'src/image_fusion/calibration_data/ximea.yaml'
+
+    # Load camera params
+    cam0_params = load_camera_params(calib0_path)
+    cam1_params = load_camera_params(calib1_path)
 
     # Define the ChAruCo board parameters
     ARUCO_DICT = cv2.aruco.DICT_5X5_50
@@ -108,56 +108,64 @@ def main():
     dictionary = cv2.aruco.getPredefinedDictionary(ARUCO_DICT)
     board = cv2.aruco.CharucoBoard((SQUARES_VERTICALLY, SQUARES_HORIZONTALLY), SQUARE_LENGTH, MARKER_LENGTH, dictionary)
     params = cv2.aruco.DetectorParameters()
-    
-    # Load images
-    img0 = cv2.imread(img0_path)
-    img1 = cv2.imread(img1_path)
-    if img0 is None or img1 is None:
-        raise IOError("Could not load one of the images. Check file paths.")
 
-    # Load camera params
-    cam0_params = load_camera_params(calib0_path)
-    cam1_params = load_camera_params(calib1_path)
+    # Keep track of the computed relative transformations
+    R_rels = []
+    t_rels = []
 
-    # Detect board pose for each image
-    rvec0, tvec0 = detect_charuco_board_pose(
-        img0,
-        board,
-        params=params,
-        dictionary=dictionary,
-        camera_matrix=cam0_params['camera_matrix'],
-        dist_coeffs=cam0_params['dist_coeffs']
-    )
-    rvec1, tvec1 = detect_charuco_board_pose(
-        img1,
-        board,
-        params=params,
-        dictionary=dictionary,
-        camera_matrix=cam1_params['camera_matrix'],
-        dist_coeffs=cam1_params['dist_coeffs']
-    )
-    if rvec0 is None or rvec1 is None:
-        print("[ERROR] Could not detect board pose in one of the images.")
-        return
+    # Over a sequence of image pairs, compute the average R_rel and t_rel
+    base_dir = 'image_data'
+    cam0 = 'firefly_left'
+    cam1 = 'ximea'
+    img_pairs = load_image_pairs(base_dir, cam0, cam1)
+    for (img0, img1) in img_pairs:
 
-    # Compute relative transformation from camera 0 to camera 1
-    R_rel, t_rel = compute_relative_transform(rvec0, tvec0, rvec1, tvec1)
+        # Detect board pose for each image
+        rvec0, tvec0 = detect_charuco_board_pose(
+            img0,
+            board,
+            params=params,
+            dictionary=dictionary,
+            camera_matrix=cam0_params['camera_matrix'],
+            dist_coeffs=cam0_params['dist_coeffs'],
+            camera_name='Camera 0'
+        )
+        rvec1, tvec1 = detect_charuco_board_pose(
+            img1,
+            board,
+            params=params,
+            dictionary=dictionary,
+            camera_matrix=cam1_params['camera_matrix'],
+            dist_coeffs=cam1_params['dist_coeffs'],
+            camera_name='Camera 1'
+        )
+        if rvec0 is None or rvec1 is None:
+            print("[ERROR] Could not detect board pose in one of the images.")
+            return
 
-    print("Relative Rotation Matrix (Camera 0 -> Camera 1):")
-    print(R_rel)
-    print("\nRelative Translation Vector (Camera 0 -> Camera 1):")
-    print(t_rel)
+        # Compute relative transformation from camera 0 to camera 1
+        R_rel, t_rel = compute_relative_transform(rvec0, tvec0, rvec1, tvec1)
 
-    # Optional: visualize axes on the images
-    axis_length = 0.1  # meters
-    cv2.drawFrameAxes(img0, cam0_params['camera_matrix'], cam0_params['dist_coeffs'],
-                       rvec0, tvec0, axis_length)
-    cv2.drawFrameAxes(img1, cam1_params['camera_matrix'], cam1_params['dist_coeffs'],
-                       rvec1, tvec1, axis_length)
-    cv2.imshow("Camera 0 Pose", img0)
-    cv2.imshow("Camera 1 Pose", img1)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+        print("Relative Rotation Matrix (Camera 0 -> Camera 1):")
+        print(R_rel)
+        print("\nRelative Translation Vector (Camera 0 -> Camera 1):")
+        print(t_rel)
+
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+
+        # Store the relative transformations
+        R_rels.append(R_rel)
+        t_rels.append(t_rel)
+
+    # Average the relative transformations
+    avg_R_rel = np.mean(R_rels, axis=0)
+    avg_t_rel = np.mean(t_rels, axis=0)
+
+    print("Average Relative Rotation Matrix (Camera 0 -> Camera 1):")
+    print(avg_R_rel)
+    print("\nAverage Relative Translation Vector (Camera 0 -> Camera 1):")
+    print(avg_t_rel)
 
 
 if __name__ == "__main__":

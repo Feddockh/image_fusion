@@ -1,11 +1,75 @@
 # Hayden Feddock
 # 1/29/2025
 
+import os
+import re
 import cv2
 import yaml
 import numpy as np
+from typing import List, Tuple
 
 
+def load_image_pairs(base_dir: str, camera1: str, camera2: str,
+                     image_extensions: Tuple[str, ...] = ('.png', '.jpg', '.jpeg', '.tif', '.tiff')
+                    ) -> List[Tuple[np.ndarray, np.ndarray]]:
+    """
+    load image pairs for two cameras given a base directory.
+
+    This function searches recursively within the specified subdirectories (one for each camera)
+    under `base_dir` for image files. It extracts a common identifier from each filename using a regex
+    (expected to be in the format "digits_digits", e.g., "1742563053_510503555"). If images from
+    both camera folders share the same identifier, they are loaded via OpenCV and paired.
+
+    Parameters:
+        base_dir (str): The base directory containing subdirectories for each camera.
+        camera1 (str): Subdirectory name for the first camera (e.g., "firefly_left").
+        camera2 (str): Subdirectory name for the second camera (e.g., "ximea").
+        image_extensions (tuple): Tuple of supported image file extensions.
+
+    Returns:
+        List[Tuple[np.ndarray, np.ndarray]]:
+            A list of tuples, where each tuple contains a pair of cv2 images (one from each camera)
+            that share the same identifier. Images that fail to load are skipped.
+    """
+
+    # Regular expression to extract a timestamp-like identifier from the filename.
+    # This pattern matches one or more digits, an underscore, then one or more digits.
+    pattern = re.compile(r'(\d+_\d+)')
+
+    def get_images_dict(camera_folder: str) -> dict:
+        """Recursively walk through camera_folder and return a dict mapping the identifier to the image file path."""
+        images = {}
+        cam_path = os.path.join(base_dir, camera_folder)
+        for root, _, files in os.walk(cam_path):
+            for file in files:
+                if file.lower().endswith(image_extensions):
+                    match = pattern.search(file)
+                    if match:
+                        key = match.group(1)
+                        full_path = os.path.join(root, file)
+                        images[key] = full_path
+        return images
+
+    # Get dictionaries of images for each camera
+    images_cam1 = get_images_dict(camera1)
+    images_cam2 = get_images_dict(camera2)
+
+    # Find common identifiers between the two cameras
+    common_keys = set(images_cam1.keys()) & set(images_cam2.keys())
+
+    pairs = []
+    for key in sorted(common_keys):
+        img_path1 = images_cam1[key]
+        img_path2 = images_cam2[key]
+        img1 = cv2.imread(img_path1)
+        img2 = cv2.imread(img_path2)
+        if img1 is not None and img2 is not None:
+            pairs.append((img1, img2))
+        else:
+            # Optionally log or print a warning if an image fails to load.
+            print(f"Warning: Failed to load image for key {key}.")
+
+    return pairs
 
 def load_camera_params(yaml_filepath):
     """
