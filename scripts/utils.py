@@ -5,6 +5,43 @@ import cv2
 import yaml
 import numpy as np
 
+
+
+def load_camera_params(yaml_filepath):
+    """
+    Loads camera parameters from a YAML file.
+
+    The YAML file should contain the following keys:
+      - camera_matrix
+      - dist_coeffs
+      - rectification_matrix (R)
+      - projection_matrix (P)
+      - width
+      - height
+
+    Parameters:
+      yaml_filepath: str
+          The path to the YAML calibration file.
+
+    Returns:
+      camera_params: dict
+          A dictionary containing the camera parameters.
+    """
+    
+    with open(yaml_filepath, 'r') as f:
+        calib_data = yaml.safe_load(f)
+
+    camera_params = {
+        'camera_matrix': np.array(calib_data['camera_matrix']['data'], dtype=np.float32).reshape((3, 3)),
+        'dist_coeffs': np.array(calib_data['distortion_coefficients']['data'], dtype=np.float32),
+        'rectification_matrix': np.array(calib_data['rectification_matrix']['data'], dtype=np.float32).reshape((3, 3)),
+        'projection_matrix': np.array(calib_data['projection_matrix']['data'], dtype=np.float32).reshape((3, 4)),
+        'width': int(calib_data['image_width']),
+        'height': int(calib_data['image_height'])
+    }
+
+    return camera_params
+
 def rectify_image(image, yaml_filepath):
     """
     Loads calibration data from the given YAML file and returns the rectified image.
@@ -32,16 +69,13 @@ def rectify_image(image, yaml_filepath):
     """
     
     # Load calibration data from YAML
-    with open(yaml_filepath, 'r') as f:
-        calib_data = yaml.safe_load(f)
-
-    width = int(calib_data['image_width'])
-    height = int(calib_data['image_height'])
-    # import pdb; pdb.set_trace()
-    camera_matrix = np.array(calib_data['camera_matrix']['data'], dtype=np.float32).reshape((3, 3))
-    dist_coeffs = np.array(calib_data['distortion_coefficients']['data'], dtype=np.float32)
-    R = np.array(calib_data['rectification_matrix']['data'], dtype=np.float32).reshape((3, 3))
-    P = np.array(calib_data['projection_matrix']['data'], dtype=np.float32).reshape((3, 4))
+    camera_params = load_camera_params(yaml_filepath)
+    camera_matrix = camera_params['camera_matrix']
+    dist_coeffs = camera_params['dist_coeffs']
+    R = camera_params['rectification_matrix']
+    P = camera_params['projection_matrix']
+    width = camera_params['width']
+    height = camera_params['height']
 
     # Create undistort/rectify map
     map1, map2 = cv2.initUndistortRectifyMap(

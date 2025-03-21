@@ -1,125 +1,164 @@
+#!/usr/bin/env python3
+
 import cv2
-import cv2.aruco as aruco
 import numpy as np
 import argparse
+from utils import load_camera_params
 
-def load_calibration(calib_file):
-    """Load camera calibration from a YAML file using OpenCV FileStorage."""
-    fs = cv2.FileStorage(calib_file, cv2.FILE_STORAGE_READ)
-    if not fs.isOpened():
-        raise IOError(f"Failed to open calibration file: {calib_file}")
-    # Adjust key names to match your YAML file structure
-    camera_matrix = fs.getNode("camera_matrix").mat()
-    dist_coeffs = fs.getNode("dist_coeff").mat()  # or "distortion_coefficients"
-    fs.release()
-    return camera_matrix, dist_coeffs
-
-def get_calibration_for_image(image_path, calib_file):
-    """
-    Load the image and, if a calibration file is provided, return its calibration.
-    Otherwise, create a default camera matrix and zero distortion coefficients.
-    """
-    image = cv2.imread(image_path)
-    if image is None:
-        raise IOError(f"Could not load image: {image_path}")
-    h, w = image.shape[:2]
-    
-    if calib_file:
-        camera_matrix, dist_coeffs = load_calibration(calib_file)
-    else:
-        # Default calibration: an example focal length and center based on image size.
-        camera_matrix = np.array([[1000, 0, w / 2],
-                                  [0, 1000, h / 2],
-                                  [0,    0,     1]], dtype=np.float32)
-        dist_coeffs = np.zeros((5, 1), dtype=np.float32)
-        print(f"Using default calibration for {image_path}")
-    
-    return image, camera_matrix, dist_coeffs
-
-def detect_board_pose(image, camera_matrix, dist_coeffs, board, aruco_dict):
-    """
-    Detect the board in the image and estimate its pose relative to the camera.
-    """
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    
-    # Detect ArUco markers in the image
-    corners, ids, rejected = aruco.detectMarkers(gray, aruco_dict)
-    if ids is None or len(ids) == 0:
-        raise ValueError("No markers detected.")
-    
-    # Interpolate to obtain ChArUco corners
-    retval, charucoCorners, charucoIds = aruco.interpolateCornersCharuco(corners, ids, gray, board)
-    if retval < 4:
-        raise ValueError("Not enough ChArUco corners detected for reliable pose estimation.")
-    
-    # Estimate the pose of the board relative to the camera
-    valid, rvec, tvec = aruco.estimatePoseCharucoBoard(charucoCorners, charucoIds, board, camera_matrix, dist_coeffs)
-    if not valid:
-        raise ValueError("Pose estimation failed.")
-    
-    return rvec, tvec
 
 def compute_relative_transform(rvec1, tvec1, rvec2, tvec2):
     """
-    Given the poses of the board in two camera coordinate systems (rvec, tvec),
+    Given the poses (rvec, tvec) of the same board in two different camera coordinate systems,
     compute the relative transformation (rotation and translation) from camera 1 to camera 2.
-    
+
     The transformation is computed using:
-      R_rel = R2 * R1^T
-      t_rel = t2 - R2 * R1^T * t1
+        R_rel = R2 * R1^T
+        t_rel = t2 - R_rel @ t1
     """
-    # Convert rotation vectors to rotation matrices
     R1, _ = cv2.Rodrigues(rvec1)
     R2, _ = cv2.Rodrigues(rvec2)
-    
+
     R_rel = R2 @ R1.T
     t_rel = tvec2 - R_rel @ tvec1
-    
+
     return R_rel, t_rel
 
+
+def detect_charuco_board_pose(image, board: cv2.aruco.Board, 
+                              params: cv2.aruco.DetectorParameters,
+                              dictionary: cv2.aruco.Dictionary,
+                              camera_matrix, dist_coeffs):
+    """
+    Detect an ChAruCo GridBoard in the given image and estimate its pose.
+
+    Parameters:
+        image: BGR or grayscale image
+        board: A cv2.aruco.GridBoard object describing the marker arrangement
+        params: cv2.aruco.DetectorParameters for marker detection
+        dictionary: cv2.aruco.Dictionary used for marker detection
+        camera_matrix: (3x3) NumPy array with camera intrinsics
+        dist_coeffs: 1D or (n,1) array of distortion coefficients
+
+    Returns:
+        (rvec, tvec) for the board pose, or (None, None) if detection fails.
+    """
+
+    # image_copy = image.copy()
+
+    # Convert to grayscale if the image is in color
+    if len(image.shape) == 3:
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    # Detect markers
+    marker_corners, marker_ids, _ = cv2.aruco.detectMarkers(image, dictionary, parameters=params)
+
+    if marker_ids is not None and len(marker_ids) > 0:
+        print(f"[DEBUG] Detected {len(marker_ids)} markers with IDs:", marker_ids.ravel())
+
+        # Interpolate Charuco corners
+        charuco_retval, charuco_corners, charuco_ids = \
+            cv2.aruco.interpolateCornersCharuco(marker_corners, marker_ids, image, board)
+
+        if charuco_retval > 0:
+            print(f"[SUCCESS] Found {charuco_retval} Charuco corners!")
+            # Draw the detected markers for debugging
+            debug_img = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+            cv2.aruco.drawDetectedMarkers(debug_img, marker_corners, marker_ids)
+            # Optionally draw Charuco corners
+            for corner in charuco_corners:
+                corner_int = (int(corner[0][0]), int(corner[0][1]))
+                cv2.circle(debug_img, corner_int, 5, (0, 255, 0), -1)
+
+            cv2.imshow("Detected Charuco Corners", debug_img)
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
+
+            # If enough corners are found, estimate the pose
+            if charuco_retval:
+                retval, rvec, tvec = cv2.aruco.estimatePoseCharucoBoard(charuco_corners, charuco_ids, board, camera_matrix, dist_coeffs, None, None)
+
+                # If pose estimation is successful, draw the axis
+                if retval:
+                    cv2.drawFrameAxes(debug_img, camera_matrix, dist_coeffs, rvec, tvec, length=0.1, thickness=15)
+                    cv2.imshow("Detected Axis", debug_img)
+                    cv2.waitKey(0)
+                    cv2.destroyAllWindows()
+
+                return rvec, tvec
+        
+    return None, None
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Compute extrinsics between two cameras from ArUco/ChArUco board images.")
-    parser.add_argument("--image1", required=True, help="Path to the first image")
-    parser.add_argument("--calib1", default=None, help="Path to the first camera calibration YAML file (optional)")
-    parser.add_argument("--image2", required=True, help="Path to the second image")
-    parser.add_argument("--calib2", default=None, help="Path to the second camera calibration YAML file (optional)")
-    args = parser.parse_args()
+    # Define image and calibration file paths
+    img0_path   = 'image_data/firefly_left/1741990075_217062601_rect_firefly_left.png'
+    # img0_path   = 'charuco_test.png'
+    img1_path   = 'image_data/ximea/675/1741990075_217062601_rect_ximea_675.png'
+    calib0_path = 'src/image_fusion/calibration_data/firefly_left.yaml'
+    calib1_path = 'src/image_fusion/calibration_data/ximea.yaml'
+
+    # Define the ChAruCo board parameters
+    ARUCO_DICT = cv2.aruco.DICT_5X5_50
+    SQUARES_VERTICALLY = 6
+    SQUARES_HORIZONTALLY = 4
+    SQUARE_LENGTH = 0.04
+    MARKER_LENGTH = 0.03
+
+    # Create the ChAruCo board
+    dictionary = cv2.aruco.getPredefinedDictionary(ARUCO_DICT)
+    board = cv2.aruco.CharucoBoard((SQUARES_VERTICALLY, SQUARES_HORIZONTALLY), SQUARE_LENGTH, MARKER_LENGTH, dictionary)
+    params = cv2.aruco.DetectorParameters()
     
-    # Define the ArUco dictionary and board parameters.
-    aruco_dict = aruco.Dictionary_get(aruco.DICT_6X6_250)
-    
-    # Define board parameters (adjust these to match your board)
-    squaresX = 5       # number of squares along the X-axis
-    squaresY = 7       # number of squares along the Y-axis
-    squareLength = 0.04  # square side length (in meters)
-    markerLength = 0.02  # marker side length (in meters)
-    board = aruco.CharucoBoard_create(squaresX, squaresY, squareLength, markerLength, aruco_dict)
-    
-    # Get images and calibrations for both cameras.
-    image1, camera_matrix1, dist_coeffs1 = get_calibration_for_image(args.image1, args.calib1)
-    image2, camera_matrix2, dist_coeffs2 = get_calibration_for_image(args.image2, args.calib2)
-    
-    # Detect board pose for each image.
-    rvec1, tvec1 = detect_board_pose(image1, camera_matrix1, dist_coeffs1, board, aruco_dict)
-    rvec2, tvec2 = detect_board_pose(image2, camera_matrix2, dist_coeffs2, board, aruco_dict)
-    
-    # Compute relative transformation from camera 1 to camera 2.
-    R_rel, t_rel = compute_relative_transform(rvec1, tvec1, rvec2, tvec2)
-    
-    print("Relative Rotation Matrix (Camera1 -> Camera2):")
+    # Load images
+    img0 = cv2.imread(img0_path)
+    img1 = cv2.imread(img1_path)
+    if img0 is None or img1 is None:
+        raise IOError("Could not load one of the images. Check file paths.")
+
+    # Load camera params
+    cam0_params = load_camera_params(calib0_path)
+    cam1_params = load_camera_params(calib1_path)
+
+    # Detect board pose for each image
+    rvec0, tvec0 = detect_charuco_board_pose(
+        img0,
+        board,
+        params=params,
+        dictionary=dictionary,
+        camera_matrix=cam0_params['camera_matrix'],
+        dist_coeffs=cam0_params['dist_coeffs']
+    )
+    rvec1, tvec1 = detect_charuco_board_pose(
+        img1,
+        board,
+        params=params,
+        dictionary=dictionary,
+        camera_matrix=cam1_params['camera_matrix'],
+        dist_coeffs=cam1_params['dist_coeffs']
+    )
+    if rvec0 is None or rvec1 is None:
+        print("[ERROR] Could not detect board pose in one of the images.")
+        return
+
+    # Compute relative transformation from camera 0 to camera 1
+    R_rel, t_rel = compute_relative_transform(rvec0, tvec0, rvec1, tvec1)
+
+    print("Relative Rotation Matrix (Camera 0 -> Camera 1):")
     print(R_rel)
-    print("\nRelative Translation Vector (Camera1 -> Camera2):")
+    print("\nRelative Translation Vector (Camera 0 -> Camera 1):")
     print(t_rel)
-    
-    # Optionally, draw axes on each image for visualization.
-    axis_length = 0.1  # Adjust as needed (in meters)
-    aruco.drawAxis(image1, camera_matrix1, dist_coeffs1, rvec1, tvec1, axis_length)
-    aruco.drawAxis(image2, camera_matrix2, dist_coeffs2, rvec2, tvec2, axis_length)
-    
-    cv2.imshow("Camera 1 Pose", image1)
-    cv2.imshow("Camera 2 Pose", image2)
+
+    # Optional: visualize axes on the images
+    axis_length = 0.1  # meters
+    cv2.drawFrameAxes(img0, cam0_params['camera_matrix'], cam0_params['dist_coeffs'],
+                       rvec0, tvec0, axis_length)
+    cv2.drawFrameAxes(img1, cam1_params['camera_matrix'], cam1_params['dist_coeffs'],
+                       rvec1, tvec1, axis_length)
+    cv2.imshow("Camera 0 Pose", img0)
+    cv2.imshow("Camera 1 Pose", img1)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
+
 
 if __name__ == "__main__":
     main()
