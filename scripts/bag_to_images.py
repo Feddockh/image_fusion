@@ -17,39 +17,35 @@ from cv_bridge import CvBridge
 from rclpy.node import Node
 from rclpy.time import Time
 from rclpy.duration import Duration
+from rclpy.subscription import Subscription
 from std_msgs.msg import String
 from sensor_msgs.msg import Image
 from utils import demosaic_ximea_5x5, rectify_image
 from ament_index_python.packages import get_package_share_directory
+import rosbag2_py
 
 # TODO: Give ability to pass folder and then run all rosbags within that folder sequentially
 
 # Be sure to run this code using the sim time parameter
-# ros2 run image_fusion director_time_synchronizer.py --ros-args -p use_sim_time:=True
+# ros2 run image_fusion bag_to_images.py --ros-args -p use_sim_time:=True
 # And be sure to run the ros2 bag play with the clock option
 # ros2 bag play /path/to/bag.bag --clock
 # If you want to enable demosaicing for the Ximea camera, use the following command:
-# ros2 run image_fusion director_time_synchronizer.py --ros-args -p use_sim_time:=True -p demosaic:=True
+# ros2 run image_fusion bag_to_images.py --ros-args -p use_sim_time:=True -p demosaic:=True
 # To run with the rectification option, use the following command:
-# ros2 run image_fusion director_time_synchronizer.py --ros-args -p use_sim_time:=True -p demosaic:=True -p rectify:=True
+# ros2 run image_fusion bag_to_images.py --ros-args -p use_sim_time:=True -p demosaic:=True -p rectify:=True
 
 class DirectorRequest:
-    def __init__(self, id: int, timestamp: Time, validity_s: float, camera_names: list) -> None:
+    def __init__(self, id: int, validity_s: float, camera_names: list) -> None:
         """
         Holds data for a single 'director command' request.
         """
         self.id = id
-        self.request_timestamp = timestamp
+        self.request_timestamp = None
         self.request_duration = Duration(seconds=validity_s)
-        self.deadline = self.request_timestamp + self.request_duration
+        self.deadline = None
         self.camera_names = camera_names
         self.images_received = dict()  # camera_name -> cv_image
-
-    def is_expired(self, current_time: Time) -> bool:
-        """
-        Check if we've passed the deadline.
-        """
-        return current_time > self.deadline
 
     def add_image(self, camera_name: str, timestamp: Time, cv_image: cv2.Mat) -> bool:
         """
@@ -57,9 +53,14 @@ class DirectorRequest:
         for this camera.
         """
         if camera_name not in self.images_received:
+            if self.request_timestamp is None:
+                self.request_timestamp = timestamp
+                self.deadline = self.request_timestamp + self.request_duration
             if timestamp >= self.request_timestamp and timestamp <= self.deadline:
                 self.images_received[camera_name] = cv_image
                 return True
+            else:
+                print(f"Image for {camera_name} at {timestamp.to_msg().sec} is out of request window.")
         return False
 
     def is_fulfilled(self) -> bool:
@@ -77,7 +78,7 @@ class DirectorTimeSynchronizer(Node):
         super().__init__('director_time_synchronizer')
 
         # Define parameters
-        self.declare_parameter('validity_window', 1.0)
+        self.declare_parameter('validity_window', 0.5)
         self.declare_parameter('director_topic', '/multi_cam_rig/director')
         self.declare_parameter('camera_names', [
             'firefly_left',
@@ -160,9 +161,6 @@ class DirectorTimeSynchronizer(Node):
         # Get the text of the command
         command = msg.data
 
-        # Get the timestamp of the command
-        timestamp = self.get_clock().now()
-
         # If the command is 'capture #', open a new request
         if command.startswith('Capture'):
 
@@ -176,11 +174,10 @@ class DirectorTimeSynchronizer(Node):
             # Create a new request object
             self.active_request = DirectorRequest(
                 id=id,
-                timestamp=timestamp,
                 validity_s=self.validity_window,
                 camera_names=self.camera_names
             )
-            self.get_logger().info(f"New request opened with deadline at {self.active_request.deadline.to_msg().sec}")
+            self.get_logger().info(f"New request opened: {id}")
 
     def image_callback(self, camera_topic: str, msg: Image) -> bool:
         """
@@ -190,8 +187,9 @@ class DirectorTimeSynchronizer(Node):
         # Get the camera name from the topic
         camera_name = self.topic_camera_map[camera_topic]
 
-        # Get the timestamp of the image
-        timestamp = self.get_clock().now()
+        # Get the timestamp of the image from the message header
+        timestamp = Time.from_msg(msg.header.stamp)
+        print(f"Image received for {camera_name} at {timestamp.to_msg().sec}")
 
         # Convert Image to CV image
         cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')

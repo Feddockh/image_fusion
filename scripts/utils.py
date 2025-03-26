@@ -6,8 +6,221 @@ import re
 import cv2
 import yaml
 import numpy as np
-from typing import List, Tuple
+from typing import List, Tuple, Dict, Set
 
+class MultiCamera:
+    def __init__(self, cameras):
+        self.cameras: List[Camera] = cameras
+
+    def get_capture_sets(self):
+        """
+        Get a list of capture sets, where each set contains one capture from each camera.
+
+        Returns:
+            List[List[Capture]]:
+                A list of capture sets, where each set contains one capture from each camera.
+        """
+        
+        cap_sets = []
+        cam0 = self.cameras[0]
+        for cap in cam0.captures:
+            cap_set = [cap]
+            for other_cam in self.cameras:
+                if other_cam != cam0:
+                    other_cap = other_cam.get_capture(cap.id)
+                    if other_cap:
+                        cap_set.append(other_cap)
+                    else:
+                        break
+            if len(cap_set) == len(self.cameras):
+                cap_sets.append(cap_set)
+        return cap_sets
+
+class Camera:
+    def __init__(self, name):
+        self.name = name
+        self.camera_matrix: np.ndarray = np.zeros((3, 3), dtype=np.float32)
+        self.dist_coeffs: np.ndarray = np.zeros((5,), dtype=np.float32)
+        self.rectification_matrix = np.eye(3, dtype=np.float32)
+        self.projection_matrix = np.zeros((3, 4), dtype=np.float32)
+        self.width = 0
+        self.height = 0
+
+    def add_capture_dir(self, image_dir):
+        for root, _, files in os.walk(image_dir):
+            for file in files:
+                if file.lower().endswith(('.png', '.jpg', '.jpeg', '.tif', '.tiff')):
+                    image_path = os.path.join(root, file)
+                    self.add_capture(image_path)
+
+    def get_capture(self, capture_id):
+        for capture in self.captures:
+            if capture.id == capture_id:
+                return capture
+        return None
+        
+class Capture:
+    def __init__(self, camera_name: str, image_path: str):
+        self.camera_name: str = camera_name
+        self.image_path: str = image_path
+        self.id: str = '_'.join(image_path.split('/')[-1].split('_')[:2])
+
+class MultiCameraCalibration:
+    def __init__(self, multicamera: MultiCamera, board: cv2.aruco.CharucoBoard, params: cv2.aruco.DetectorParameters):
+        self.camera: MultiCamera = multicamera
+        self.board: cv2.aruco.Board = board
+        self.params: cv2.aruco.DetectorParameters = params
+
+        # self.captures
+
+
+
+        # self.capture_sets: List[List[Capture]] = []
+
+        # self.all_marker_ids = {cam.name: [] for cam in multi_cam.cameras}
+
+    def add_captures(self, camera: Camera, image_dir: str):
+        camera.add_capture_dir(image_dir)
+
+    def calibrate(self):
+        pass
+
+
+
+
+
+
+
+
+
+
+
+def project_points(points, colors, intrinsic, extrinsic, width, height):
+    """
+    Project 3D points to 2D image coordinates using a pinhole camera model.
+
+    Parameters:
+        points: Nx3 numpy array of 3D points in world coordinates.
+        colors: Nx3 numpy array of RGB colors corresponding to the points.
+        intrinsic: 3x3 numpy array representing the camera intrinsic matrix.
+        extrinsic: 4x4 numpy array representing the camera extrinsic transform (world->camera).
+        width: Width of the output image.
+        height: Height of the output image.
+    Returns:
+        image: 2D numpy array of shape (height, width, 3) representing the projected image.
+    """
+
+    # Convert points to homogeneous coordinates
+    num_points = points.shape[0]
+    homog_points = np.hstack((points, np.ones((num_points, 1))))
+
+    # Transform points from world space to the new camera view
+    cam_points = (extrinsic @ homog_points.T).T
+
+    # Keep points in front of the camera (z>0)
+    valid = cam_points[:, 2] > 0
+    cam_points = cam_points[valid]
+    colors = colors[valid]
+
+    # Pin-hole projection
+    proj = (intrinsic @ cam_points[:, :3].T).T
+    proj /= proj[:, 2:3]  # perspective divide
+
+    # Create empty images for color and depth
+    image = np.zeros((height, width, 3), dtype=np.uint8)
+    z_buffer = np.full((height, width), np.inf)
+
+    # Draw points based on z-depth
+    for pt, color, z in zip(proj, colors, cam_points[:, 2]):
+        u, v = int(round(pt[0])), int(round(pt[1]))
+        if 0 <= u < width and 0 <= v < height:
+            if z < z_buffer[v, u]:
+                z_buffer[v, u] = z
+                # Scale color to [0..255] if needed
+                if np.max(color) <= 1.0:
+                    color = (color*255).astype(np.uint8)
+                image[v, u] = color
+    return image
+
+def compute_relative_transform(rvec1, tvec1, rvec2, tvec2):
+    """
+    Given the poses (rvec, tvec) of the same board in two different camera coordinate systems,
+    compute the relative transformation (rotation and translation) from camera 1 to camera 2.
+
+    The transformation is computed using:
+        R_rel = R2 * R1^T
+        t_rel = t2 - R_rel @ t1
+    """
+    R1, _ = cv2.Rodrigues(rvec1)
+    R2, _ = cv2.Rodrigues(rvec2)
+
+    R_rel = R2 @ R1.T
+    t_rel = tvec2 - R_rel @ tvec1
+
+    return R_rel, t_rel
+
+def detect_charuco_board_pose(image, board: cv2.aruco.Board, 
+                              params: cv2.aruco.DetectorParameters,
+                              dictionary: cv2.aruco.Dictionary,
+                              camera_matrix, dist_coeffs, camera_name='Camera 0'):
+    """
+    Detect an ChAruCo GridBoard in the given image and estimate its pose.
+
+    Parameters:
+        image: BGR or grayscale image
+        board: A cv2.aruco.GridBoard object describing the marker arrangement
+        params: cv2.aruco.DetectorParameters for marker detection
+        dictionary: cv2.aruco.Dictionary used for marker detection
+        camera_matrix: (3x3) NumPy array with camera intrinsics
+        dist_coeffs: 1D or (n,1) array of distortion coefficients
+
+    Returns:
+        (rvec, tvec) for the board pose, or (None, None) if detection fails.
+    """
+
+    # image_copy = image.copy()
+
+    # Convert to grayscale if the image is in color
+    if len(image.shape) == 3:
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    # Detect markers
+    marker_corners, marker_ids, _ = cv2.aruco.detectMarkers(image, dictionary, parameters=params)
+
+    if marker_ids is not None and len(marker_ids) > 0:
+
+        # # Sort detected markers by ID so we have a consistent order (important for averaging relative transformations)
+        # sorted_indices = np.argsort(marker_ids.ravel())
+        # marker_ids = marker_ids[sorted_indices]
+        # marker_corners = [marker_corners[i] for i in sorted_indices]
+        print(f"[DEBUG] Detected {len(marker_ids)} markers with IDs:", marker_ids.ravel())
+
+        # Interpolate Charuco corners
+        charuco_retval, charuco_corners, charuco_ids = \
+            cv2.aruco.interpolateCornersCharuco(marker_corners, marker_ids, image, board)
+
+        if charuco_retval > 0:
+            print(f"[SUCCESS] Found {charuco_retval} Charuco corners!")
+            # Draw the detected markers for debugging
+            debug_img = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+            cv2.aruco.drawDetectedMarkers(debug_img, marker_corners, marker_ids)
+            # Optionally draw Charuco corners
+            for corner in charuco_corners:
+                corner_int = (int(corner[0][0]), int(corner[0][1]))
+                cv2.circle(debug_img, corner_int, 5, (0, 255, 0), -1)
+
+            # If enough corners are found, estimate the pose
+            if charuco_retval:
+                retval, rvec, tvec = cv2.aruco.estimatePoseCharucoBoard(charuco_corners, charuco_ids, board, camera_matrix, dist_coeffs, None, None)
+
+                # If pose estimation is successful, draw the axis
+                if retval:
+                    cv2.drawFrameAxes(debug_img, camera_matrix, dist_coeffs, rvec, tvec, length=0.1, thickness=15)
+                    cv2.imshow(f"Detected Charuco Board Pose {camera_name}", debug_img)
+
+                return rvec, tvec
+        
+    return None, None
 
 def load_image_pairs(base_dir: str, camera1: str, camera2: str,
                      image_extensions: Tuple[str, ...] = ('.png', '.jpg', '.jpeg', '.tif', '.tiff')
@@ -70,6 +283,56 @@ def load_image_pairs(base_dir: str, camera1: str, camera2: str,
             print(f"Warning: Failed to load image for key {key}.")
 
     return pairs
+
+def load_image_sets(img_dirs: List[str]) -> List[Dict[str, str]]:
+    """
+    Load image sets from a list of directories.
+
+    Parameters:
+        img_dirs: List[str]
+            A list of directories containing matching images.
+
+    Returns:
+        List[Dict[str, str]]
+            A list of image sets with each element as a path.
+    """
+
+    # Create a list of valid image prefixes
+    prefixes = []
+
+    # Walk through the first directory and collect image prefixes
+    for root, _, files in os.walk(img_dirs[0]):
+        for file in files:
+            prefix = re.search(r'(\d+_\d+)', file)
+            if prefix:
+                prefixes.append(prefix.group(1))
+    
+    # Now for each prefix, load the corresponding images from all directories
+    # Only load the corresponding images if they exist in all directories
+    images = []
+    for prefix in prefixes:
+        img_set = []
+        for img_dir in img_dirs:
+
+            # Find the file matching the prefix in the current directory
+            found = False
+            for root, _, files in os.walk(img_dir):
+                for file in files:
+                    if prefix in file and file.lower().endswith(('.png', '.jpg', '.jpeg', '.tif', '.tiff')):
+                        img_path = os.path.join(root, file)
+                        img_set.append(img_path)
+                        found = True
+                        break
+                if found:
+                    break
+        if len(img_set) == len(img_dirs):
+            images.append(img_set)
+
+    if images:
+        images.sort(key=lambda x: len(x), reverse=True)
+        return images
+
+    return []
 
 def load_camera_params(yaml_filepath):
     """

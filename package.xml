@@ -14,11 +14,15 @@
     <build_depend>rclcpp</build_depend>
     <build_depend>OpenCV</build_depend>
     <build_depend>yaml-cpp</build_depend>
+    <build_depend>sensor_msgs</build_depend>
+    <build_depend>rosbag2_cpp</build_depend>
 
     <!-- Execution dependencies -->
     <exec_depend>rclcpp</exec_depend>
     <exec_depend>OpenCV</exec_depend>
     <exec_depend>yaml-cpp</exec_depend>
+    <exec_depend>sensor_msgs</exec_depend>
+    <exec_depend>rosbag2_cpp</exec_depend>
 
     <export>
         <build_type>ament_cmake</build_type>
