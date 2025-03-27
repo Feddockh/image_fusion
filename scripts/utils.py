@@ -8,92 +8,6 @@ import yaml
 import numpy as np
 from typing import List, Tuple, Dict, Set
 
-class MultiCamera:
-    def __init__(self, cameras):
-        self.cameras: List[Camera] = cameras
-
-    def get_capture_sets(self):
-        """
-        Get a list of capture sets, where each set contains one capture from each camera.
-
-        Returns:
-            List[List[Capture]]:
-                A list of capture sets, where each set contains one capture from each camera.
-        """
-        
-        cap_sets = []
-        cam0 = self.cameras[0]
-        for cap in cam0.captures:
-            cap_set = [cap]
-            for other_cam in self.cameras:
-                if other_cam != cam0:
-                    other_cap = other_cam.get_capture(cap.id)
-                    if other_cap:
-                        cap_set.append(other_cap)
-                    else:
-                        break
-            if len(cap_set) == len(self.cameras):
-                cap_sets.append(cap_set)
-        return cap_sets
-
-class Camera:
-    def __init__(self, name):
-        self.name = name
-        self.camera_matrix: np.ndarray = np.zeros((3, 3), dtype=np.float32)
-        self.dist_coeffs: np.ndarray = np.zeros((5,), dtype=np.float32)
-        self.rectification_matrix = np.eye(3, dtype=np.float32)
-        self.projection_matrix = np.zeros((3, 4), dtype=np.float32)
-        self.width = 0
-        self.height = 0
-
-    def add_capture_dir(self, image_dir):
-        for root, _, files in os.walk(image_dir):
-            for file in files:
-                if file.lower().endswith(('.png', '.jpg', '.jpeg', '.tif', '.tiff')):
-                    image_path = os.path.join(root, file)
-                    self.add_capture(image_path)
-
-    def get_capture(self, capture_id):
-        for capture in self.captures:
-            if capture.id == capture_id:
-                return capture
-        return None
-        
-class Capture:
-    def __init__(self, camera_name: str, image_path: str):
-        self.camera_name: str = camera_name
-        self.image_path: str = image_path
-        self.id: str = '_'.join(image_path.split('/')[-1].split('_')[:2])
-
-class MultiCameraCalibration:
-    def __init__(self, multicamera: MultiCamera, board: cv2.aruco.CharucoBoard, params: cv2.aruco.DetectorParameters):
-        self.camera: MultiCamera = multicamera
-        self.board: cv2.aruco.Board = board
-        self.params: cv2.aruco.DetectorParameters = params
-
-        # self.captures
-
-
-
-        # self.capture_sets: List[List[Capture]] = []
-
-        # self.all_marker_ids = {cam.name: [] for cam in multi_cam.cameras}
-
-    def add_captures(self, camera: Camera, image_dir: str):
-        camera.add_capture_dir(image_dir)
-
-    def calibrate(self):
-        pass
-
-
-
-
-
-
-
-
-
-
 
 def project_points(points, colors, intrinsic, extrinsic, width, height):
     """
@@ -222,6 +136,7 @@ def detect_charuco_board_pose(image, board: cv2.aruco.Board,
         
     return None, None
 
+# DEPRECATED
 def load_image_pairs(base_dir: str, camera1: str, camera2: str,
                      image_extensions: Tuple[str, ...] = ('.png', '.jpg', '.jpeg', '.tif', '.tiff')
                     ) -> List[Tuple[np.ndarray, np.ndarray]]:
@@ -284,6 +199,7 @@ def load_image_pairs(base_dir: str, camera1: str, camera2: str,
 
     return pairs
 
+# DEPRECATED
 def load_image_sets(img_dirs: List[str]) -> List[Dict[str, str]]:
     """
     Load image sets from a list of directories.

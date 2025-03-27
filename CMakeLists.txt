@@ -7,30 +7,6 @@ find_package(ament_cmake REQUIRED)
 # Dependencies
 find_package(rclcpp REQUIRED)
 find_package(OpenCV REQUIRED)
-find_package(yaml-cpp REQUIRED)
-find_package(sensor_msgs REQUIRED)
-find_package(rosbag2_cpp REQUIRED)
-
-
-include_directories(include)
-
-add_executable(bag_time_reader_node
-    src/bag_time_reader.cpp
-)
-
-ament_target_dependencies(bag_time_reader_node
-    rclcpp
-    rosbag2_cpp
-)
-
-install(TARGETS
-    bag_time_reader_node
-    DESTINATION lib/${PROJECT_NAME}
-)
-
-install(DIRECTORY include/
-    DESTINATION include
-)
 
 
 # # Create extrinsics executable
@@ -43,14 +19,14 @@ install(DIRECTORY include/
 
 # Install Python scripts to the package share folder.
 install(PROGRAMS
-  scripts/bag_to_images.py
+  scripts/multi_cam_bag_reader.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
-# Install calibration_data directory to the package share folder.
+# Install calibration_files directory to the package share folder.
 install(
-  DIRECTORY calibration_data/
-  DESTINATION share/${PROJECT_NAME}/calibration_data
+  DIRECTORY calibration_files/
+  DESTINATION share/${PROJECT_NAME}/calibration_files
 )
 
 # # Install C++ executables to the package share folder.

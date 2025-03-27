@@ -2,14 +2,13 @@
 
 import os
 import sys
-import numpy as np
 import cv2
 from cv_bridge import CvBridge
 from rclpy.serialization import deserialize_message
 import rosbag2_py
 from std_msgs.msg import String
 from sensor_msgs.msg import Image
-from typing import Dict, List
+from typing import Dict
 from utils import demosaic_ximea_5x5, rectify_image
 
 
@@ -114,7 +113,6 @@ class CaptureRequest:
 
         print(f"Saved images to: {output_dir}")
     
-
 class MultiCamBagReader:
     def __init__(self, output_dir: str) -> None:
         """
