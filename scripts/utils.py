@@ -5,8 +5,134 @@ import os
 import re
 import cv2
 import yaml
+import glob
 import numpy as np
 from typing import List, Tuple, Dict, Set
+
+
+
+# Constants
+EXTENSION = ".png"
+CALIBRATION_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "calibration_files")
+
+class FlowList(list):
+    """A list that PyYAML will emit in [a, b, c] (flow) style."""
+    pass
+
+def _represent_flow_list(dumper, data):
+    return dumper.represent_sequence('tag:yaml.org,2002:seq', data, flow_style=True)
+
+yaml.add_representer(FlowList, _represent_flow_list)
+
+class Camera:
+    def __init__(self, name: str):
+        self.name = name
+        self.width: int = 0
+        self.height: int = 0
+        self.error: float = 0.0
+        self.camera_matrix: np.ndarray = np.zeros((3, 3), dtype=np.float32)
+        self.dist_coeffs: np.ndarray = np.zeros((5,), dtype=np.float32)
+        self.rectification_matrix: np.ndarray = np.eye(3, dtype=np.float32)
+        self.projection_matrix: np.ndarray = np.zeros((3, 4), dtype=np.float32)
+        self.transforms: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
+
+    def load_params(self):
+        """
+        Load the camera parameters from a YAML file.
+        """
+        yaml_file = os.path.join(CALIBRATION_DIR, f"{self.name}.yaml")
+        with open(yaml_file, 'r') as f:
+            calib_data = yaml.safe_load(f)
+        self.width = int(calib_data['image_width'])
+        self.height = int(calib_data['image_height'])
+        self.camera_matrix = np.array(calib_data['camera_matrix']['data'], dtype=np.float32).reshape((3, 3))
+        self.dist_coeffs = np.array(calib_data['distortion_coefficients']['data'], dtype=np.float32)
+        self.rectification_matrix = np.array(calib_data['rectification_matrix']['data'], dtype=np.float32).reshape((3, 3))
+        self.projection_matrix = np.array(calib_data['projection_matrix']['data'], dtype=np.float32).reshape((3, 4))
+        # Load transforms if available
+        if 'transforms' in calib_data:
+            for name, transform in calib_data['transforms'].items():
+                R = np.array(transform['R'], dtype=np.float32).reshape((3, 3))
+                t = np.array(transform['t'], dtype=np.float32).reshape((3, 1))
+                self.transforms[name] = (R, t)
+    
+    def save_params(self):
+        """
+        Save the camera parameters to a YAML file, with all `data:` arrays in
+        horizontal (flow) style.
+        """
+        yaml_file = os.path.join(CALIBRATION_DIR, f"{self.name}.yaml")
+        calib_data = {
+            'image_width': self.width,
+            'image_height': self.height,
+            'camera_matrix': {
+                'rows': 3, 'cols': 3,
+                'data': FlowList(self.camera_matrix.ravel().tolist())
+            },
+            'distortion_coefficients': {
+                'rows': 1, 'cols': 5,
+                'data': FlowList(self.dist_coeffs.ravel().tolist())
+            },
+            'rectification_matrix': {
+                'rows': 3, 'cols': 3,
+                'data': FlowList(self.rectification_matrix.ravel().tolist())
+            },
+            'projection_matrix': {
+                'rows': 3, 'cols': 4,
+                'data': FlowList(self.projection_matrix.ravel().tolist())
+            },
+            'transforms': {
+                name: {
+                    'R': FlowList(transform[0].ravel().tolist()),
+                    't': FlowList(transform[1].ravel().tolist())
+                } for name, transform in self.transforms.items()
+            }
+        }
+
+        os.makedirs(CALIBRATION_DIR, exist_ok=True)
+        with open(yaml_file, 'w') as f:
+            yaml.dump(calib_data, f, sort_keys=False)
+        
+class MultiCamCapture:
+    def __init__(self, cameras: List[Camera], image_set_dir: str):
+        """
+        Store the paths to the images for each camera used in a single capture.
+        """
+        self.cameras = cameras
+        self.id = os.path.basename(image_set_dir)
+        self.image_set_dir = image_set_dir
+        self.image_paths: Dict[str, List[str]] = {
+            cam.name: self.get_paths(cam.name) for cam in cameras
+        }
+        self.images: Dict[str, List[np.ndarray]] = {}
+
+    def get_paths(self, camera_name: str) -> List[str]:
+        """
+        Get the paths to the images for a given camera.
+        """
+        # Check for the camera name in the image set dir and determine if it's a file or directory
+        potential_file = os.path.join(self.image_set_dir, camera_name + EXTENSION)
+        potential_dir = os.path.join(self.image_set_dir, camera_name)
+        if os.path.isfile(potential_file):
+            return [potential_file]
+        elif os.path.isdir(potential_dir):
+            return sorted(glob.glob(os.path.join(potential_dir, f"*{EXTENSION}")))
+        else:
+            return []
+        
+    def load_images(self) -> Dict[str, List[np.ndarray]]:
+        """
+        Load the images from the image paths.
+        """
+        for cam_name, paths in self.image_paths.items():
+            self.images[cam_name] = [cv2.imread(path) for path in paths]
+        return self.images
+    
+    def get_images(self, camera_name: str) -> List[np.ndarray]:
+        """
+        Get the images for a given camera.
+        """
+        return self.images[camera_name]
 
 
 def project_points(points, colors, intrinsic, extrinsic, width, height):

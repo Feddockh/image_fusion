@@ -1,3 +1,5 @@
+Explain why my resulting rotation is always identity and my translation is always zero from the extrinsic compute function.
+
 # Hayden Feddock
 # 3/21/2025
 
@@ -8,8 +10,65 @@ import numpy as np
 import glob
 from typing import List, Dict
 from scipy.optimize import least_squares
-from utils import Camera, MultiCamCapture
 
+
+# Constants
+CAMERA_NAMES = ["firefly_left", "firefly_right", "ximea", "zed_left", "zed_right"]
+EXTENSION = ".png"
+DEMOSAIC_MODE = True
+CALIBRATION_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "calibration_files")
+
+
+class Camera:
+    def __init__(self, name: str):
+        self.name = name
+        self.camera_matrix: np.ndarray = np.zeros((3, 3), dtype=np.float32)
+        self.dist_coeffs: np.ndarray = np.zeros((5,), dtype=np.float32)
+        self.rectification_matrix: np.ndarray = np.eye(3, dtype=np.float32)
+        self.projection_matrix: np.ndarray = np.zeros((3, 4), dtype=np.float32)
+        self.width: int = 0
+        self.height: int = 0
+
+class MultiCamCapture:
+    def __init__(self, cameras: List[Camera], image_set_dir: str):
+        """
+        Store the paths to the images for each camera used in a single capture.
+        """
+        self.cameras = cameras
+        self.id = os.path.basename(image_set_dir)
+        self.image_set_dir = image_set_dir
+        self.image_paths: Dict[str, List[str]] = {
+            cam.name: self.get_paths(cam.name) for cam in cameras
+        }
+        self.images: Dict[str, List[np.ndarray]] = {}
+
+    def get_paths(self, camera_name: str) -> List[str]:
+        """
+        Get the paths to the images for a given camera.
+        """
+        # Check for the camera name in the image set dir and determine if it's a file or directory
+        potential_file = os.path.join(self.image_set_dir, camera_name + EXTENSION)
+        potential_dir = os.path.join(self.image_set_dir, camera_name)
+        if os.path.isfile(potential_file):
+            return [potential_file]
+        elif os.path.isdir(potential_dir):
+            return sorted(glob.glob(os.path.join(potential_dir, f"*{EXTENSION}")))
+        else:
+            return []
+        
+    def load_images(self) -> Dict[str, List[np.ndarray]]:
+        """
+        Load the images from the image paths.
+        """
+        for cam_name, paths in self.image_paths.items():
+            self.images[cam_name] = [cv2.imread(path) for path in paths]
+        return self.images
+    
+    def get_images(self, camera_name: str) -> List[np.ndarray]:
+        """
+        Get the images for a given camera.
+        """
+        return self.images[camera_name]
 
 class MultiCamCalibration:
     def __init__(self, cameras: List[Camera], charuco_board: cv2.aruco.CharucoBoard):
@@ -41,32 +100,22 @@ class MultiCamCalibration:
         self.all_marker_corners: Dict[str, List[np.ndarray]] = {cam.name: [] for cam in cameras}
         self.all_marker_ids: Dict[str, List[np.ndarray]] = {cam.name: [] for cam in cameras}
 
-        # r_vecs and t_vecs are the rotation and translation vectors for each image
-        self.all_r_vecs: Dict[str, List[np.ndarray]] = {cam.name: [] for cam in cameras}
-        self.all_t_vecs: Dict[str, List[np.ndarray]] = {cam.name: [] for cam in cameras}
-
     def add_capture_dir(self, data_dir: str):
         for subdir in glob.glob(os.path.join(data_dir, "*")):
             if os.path.isdir(subdir):
                 self.captures.append(MultiCamCapture(self.cameras, subdir))
-        
-        if not self.captures:
-            raise ValueError(f"No valid capture directories found in {data_dir}.")
 
     def detect_corners(self):
         """
         Detect the corners of the ChAruCo board for each camera in the multi-camera system.
         """
 
-        if self.captures is None or len(self.captures) == 0:
-            raise ValueError("No captures have been added to the calibration object.")
-
         # Loop through each capture set and detect the board and corners
         for capture in self.captures:
 
             # Load the images for each camera
             capture.load_images()
-
+            
             # Detect the board and corners for each camera
             for cam in self.cameras:
                 img = capture.get_images(cam.name)[0] # Just using the first image if there are multiple
@@ -99,6 +148,7 @@ class MultiCamCalibration:
         """
         Compute the intrinsics for a single camera.
         """
+        # Skip cameras with no detections
         if len(self.all_charuco_corners[camera.name]) == 0:
             print(f"Warning: No detections for camera {camera.name}. Skipping calibration.")
             return
@@ -113,18 +163,14 @@ class MultiCamCalibration:
             distCoeffs=None
         )
 
-        # Save the camera data
-        camera.error = err
-        camera.camera_matrix = camera_matrix
-        camera.dist_coeffs = dist_coeffs
-        self.all_r_vecs[camera.name] = rvecs
-        self.all_t_vecs[camera.name] = tvecs
+        return err, camera_matrix, dist_coeffs
 
-        return err, camera_matrix, dist_coeffs, rvecs, tvecs
-
-    def compute_stereo_rectification(self, camera0: Camera, camera1: Camera):
+    def compute_extrinsics(self, camera0: Camera, camera1: Camera):
         """
-        Compute the stereo rectification parameters between two cameras.
+        Compute the extrinsics between two cameras using camera 0 as the reference.
+        This function assumes that the cameras are already intrinsically calibrated and 
+        that the object points and image points have been computed. We use the Levenberg-Marquardt
+        algorithm to optimize the rotation and translation between the two cameras.
         """
         # Check for detections in both cameras
         if len(self.all_charuco_corners[camera0.name]) == 0 or len(self.all_charuco_corners[camera1.name]) == 0:
@@ -153,86 +199,53 @@ class MultiCamCalibration:
             capture_img_pts0.append(aligned_img0)
             capture_img_pts1.append(aligned_img1)
 
-        # Compute the stereo rectification parameters
-        ret, cm1, dc1, cm2, dc2, R, T, E, F = cv2.stereoCalibrate(
-            objectPoints=capture_obj_pts,
-            imagePoints1=capture_img_pts0,
-            imagePoints2=capture_img_pts1,
-            cameraMatrix1=camera0.camera_matrix,
-            distCoeffs1=camera0.dist_coeffs,
-            cameraMatrix2=camera1.camera_matrix,
-            distCoeffs2=camera1.dist_coeffs,
-            imageSize=(camera0.width, camera0.height),
-            criteria=(cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_COUNT, 100, 1e-5),
-            flags=cv2.CALIB_FIX_INTRINSIC
-        )
-
-        # Stereo‑rectify → get R1, R2, P1, P2, Q
-        R1, R2, P1, P2, Q, _, _ = cv2.stereoRectify(
-            cameraMatrix1=cm1, distCoeffs1=dc1,
-            cameraMatrix2=cm2, distCoeffs2=dc2,
-            imageSize=(camera0.width, camera0.height),
-            R=R, T=T,
-            flags=cv2.CALIB_ZERO_DISPARITY,
-            alpha=0
-        )
-
-        # Store results
-        camera0.rectification_matrix = R1
-        camera0.projection_matrix    = P1
-        camera1.rectification_matrix = R2
-        camera1.projection_matrix    = P2
-
-        return ret, R1, R2, P1, P2, Q
-
-    def compute_extrinsics(self, camera0: Camera, camera1: Camera):
-        """
-        Compute the extrinsics between two cameras using camera 0 as the reference.
-        This function assumes that the cameras are already intrinsically calibrated.
-        """
-
-        # Initial guess: identity rotation, zero translation
-        x0 = np.zeros(6, dtype=np.float64)
-
+        # Convert the object points and image points to numpy arrays
+        all_obj_pts = np.vstack(capture_obj_pts)
+        all_img_pts0 = np.vstack(capture_img_pts0)
+        all_img_pts1 = np.vstack(capture_img_pts1)
+        
         def residuals(x):
-            R = cv2.Rodrigues(x[0:3])[0]
-            t = x[3:6].reshape(3, 1)
-            residual_list = []
-            for r_vec0, t_vec0, r_vec1, t_vec1 in zip(
-                    self.all_r_vecs[camera0.name], 
-                    self.all_t_vecs[camera0.name], 
-                    self.all_r_vecs[camera1.name], 
-                    self.all_t_vecs[camera1.name]):
-                
-                R0 = cv2.Rodrigues(r_vec0)[0]
-                R1 = cv2.Rodrigues(r_vec1)[0]
+            # Extract the rotation and translation from the input vector
+            r = x[:3]
+            t = x[3:]
+            R, _ = cv2.Rodrigues(r)
 
-                R1_pred = R @ R0
-                t1_pred = R @ t_vec0.reshape(3,1) + t
+            # Project to camera0 (pose is identity)
+            proj0, _ = cv2.projectPoints(
+                objectPoints=all_obj_pts,
+                rvec=np.zeros(3),
+                tvec=np.zeros(3),
+                cameraMatrix=camera0.camera_matrix,
+                distCoeffs=camera0.dist_coeffs
+            )
+            proj0 = proj0.reshape(-1, 1, 2)
 
-                # Compute the difference in axis angle representation
-                R_delta = R1_pred.T @ R1
-                r_resid = cv2.Rodrigues(R_delta)[0].ravel()
+            # Project to camera1 (pose = R, t)
+            proj1, _ = cv2.projectPoints(
+                objectPoints=all_obj_pts,
+                rvec=r,
+                tvec=t,
+                cameraMatrix=camera1.camera_matrix,
+                distCoeffs=camera1.dist_coeffs
+            )
+            proj1 = proj1.reshape(-1, 1, 2)
 
-                # Compute the difference in translation
-                t_resid = (t_vec1 - t1_pred).ravel()
+            # Compute reprojection residuals
+            res = np.concatenate([(proj0 - all_img_pts0).ravel(), (proj1 - all_img_pts1).ravel()])
+            return res
+        
+        # Initial guess: identity rotation, zero translation
+        rvec = np.zeros(3)
+        tvec = np.zeros(3)
+        x0 = np.hstack((rvec, tvec))
 
-                residual_list.append(r_resid)
-                residual_list.append(t_resid)
-            
-            return np.hstack(residual_list)
-
-        # Run least squares
-        res = least_squares(residuals, x0, method='lm')
-
-        # Extract the optimized parameters
-        R = cv2.Rodrigues(res.x[0:3])[0]
-        t = res.x[3:6].reshape(3, 1)
-
-        # Save the extrinsics
-        camera0.transforms[camera1.name] = (R, t)
-
-        return res.cost, R, t
+        # Optimize the rotation and translation between the two cameras
+        result = least_squares(residuals, x0, method='lm')
+        r_opt = result.x[:3]
+        t_opt = result.x[3:]
+        R_opt,_ = cv2.Rodrigues(r_opt)
+        err = np.linalg.norm(result.fun) / result.fun.size
+        return err, R_opt, t_opt.reshape(3,1)
 
 
 def main():
@@ -246,7 +259,7 @@ def main():
 
     # # Expand the data folder path if it contains '~'
     # data_dir = os.path.expanduser(data_dir)
-    data_dir = "/home/hayden/cmu/kantor_lab/ros2_ws/calibration_images"
+    data_dir = "/home/hayden/cmu/kantor_lab/ros2_ws/image_data"
 
     # Construct the camera objects
     firefly_left = Camera("firefly_left")
@@ -276,26 +289,17 @@ def main():
 
     # Compute the intrinsics for each camera
     for cam in cameras:
-        err = multi_cam_calib.compute_intrinsics(cam)[0]
+        err, camera_matrix, dist_coeffs = multi_cam_calib.compute_intrinsics(cam)
+        cam.camera_matrix = camera_matrix
+        cam.dist_coeffs = dist_coeffs
         print(f"Camera {cam.name} intrinsics computed with error {err:.4f}.")
 
     # Compute the extrinsics between the ximea and firefly_left cameras
-    err = multi_cam_calib.compute_extrinsics(ximea, firefly_left)[0]
+    err, R, t = multi_cam_calib.compute_extrinsics(ximea, firefly_left)
     print(f"Extrinsics between ximea and firefly_left computed with error {err:.4f}.")
-
-    # Compute the stereo rectification between the firefly_left and firefly_right cameras
-    err = multi_cam_calib.compute_stereo_rectification(firefly_left, firefly_right)[0]
-    print(f"Stereo rectification between firefly_left and firefly_right computed with error {err:.4f}.")
-
-    # Compute the stereo rectification between the zed_left and zed_right cameras
-    err = multi_cam_calib.compute_stereo_rectification(zed_left, zed_right)[0]
-    print(f"Stereo rectification between zed_left and zed_right computed with error {err:.4f}.")
-
-    # Save the camera calibrations
-    for cam in cameras:
-        cam.save_params()
+    print(f"Rotation:\n{R}")
+    print(f"Translation:\n{t}")
 
 
 if __name__ == "__main__":
     main()
-

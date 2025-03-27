@@ -10,6 +10,7 @@ from std_msgs.msg import String
 from sensor_msgs.msg import Image
 from typing import Dict
 from utils import demosaic_ximea_5x5, rectify_image
+from utils import CALIBRATION_DIR
 
 
 # Constants
@@ -24,7 +25,6 @@ CAMERA_TOPICS = {
 VALIDITY_WINDOW = 1.0 * 1e9 # nanoseconds
 DEMOSAIC_MODE = True
 RECTIFY_MODE = False
-CALIBRATION_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "calibration_files")
 
 
 class CaptureRequest:
