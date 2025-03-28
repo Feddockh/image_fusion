@@ -127,7 +127,8 @@ class MultiCamCalibration:
 
     def compute_stereo_rectification(self, camera0: Camera, camera1: Camera):
         """
-        Compute the stereo rectification parameters between two cameras.
+        Compute the stereo rectification parameters between two cameras. This 
+        uses the Levenberg-Marquardt algorithm to minimize the reprojection error.
         """
         # Check for detections in both cameras
         if len(self.all_charuco_corners[camera0.name]) == 0 or len(self.all_charuco_corners[camera1.name]) == 0:
@@ -294,8 +295,8 @@ def main():
     print(f"Stereo rectification between zed_left and zed_right computed with error {err:.4f}.")
 
     # Save the camera calibrations
-    for cam in cameras:
-        cam.save_params()
+    # for cam in cameras:
+        # cam.save_params()
 
 if __name__ == "__main__":
     main()

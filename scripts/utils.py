@@ -162,7 +162,7 @@ def project_points(points, colors, intrinsic, extrinsic, width, height):
         points: Nx3 numpy array of 3D points in world coordinates.
         colors: Nx3 numpy array of RGB colors corresponding to the points.
         intrinsic: 3x3 numpy array representing the camera intrinsic matrix.
-        extrinsic: 4x4 numpy array representing the camera extrinsic transform (world->camera).
+        extrinsic: 3x4 numpy array representing the camera extrinsic transform (world->camera).
         width: Width of the output image.
         height: Height of the output image.
     Returns:
