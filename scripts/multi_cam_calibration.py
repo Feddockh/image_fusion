@@ -120,6 +120,9 @@ class MultiCamCalibration:
         self.all_r_vecs[camera.name] = rvecs
         self.all_t_vecs[camera.name] = tvecs
 
+        # Set the projection matrix to the camera matrix for now, will be updated later if stereo camera
+        camera.projection_matrix[:3, :3] = camera_matrix 
+
         return err, camera_matrix, dist_coeffs, rvecs, tvecs
 
     def compute_stereo_rectification(self, camera0: Camera, camera1: Camera):
@@ -234,7 +237,6 @@ class MultiCamCalibration:
 
         return res.cost, R, t
 
-
 def main():
 
     # # Retrieve folder containing the capture sets from input arguments
@@ -294,7 +296,6 @@ def main():
     # Save the camera calibrations
     for cam in cameras:
         cam.save_params()
-
 
 if __name__ == "__main__":
     main()

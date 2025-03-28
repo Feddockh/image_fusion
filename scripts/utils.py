@@ -8,21 +8,12 @@ import yaml
 import glob
 import numpy as np
 from typing import List, Tuple, Dict, Set
-
+import open3d as o3d
 
 
 # Constants
 EXTENSION = ".png"
 CALIBRATION_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "calibration_files")
-
-class FlowList(list):
-    """A list that PyYAML will emit in [a, b, c] (flow) style."""
-    pass
-
-def _represent_flow_list(dumper, data):
-    return dumper.represent_sequence('tag:yaml.org,2002:seq', data, flow_style=True)
-
-yaml.add_representer(FlowList, _represent_flow_list)
 
 class Camera:
     def __init__(self, name: str):
@@ -53,7 +44,7 @@ class Camera:
         if 'transforms' in calib_data:
             for name, transform in calib_data['transforms'].items():
                 R = np.array(transform['R'], dtype=np.float32).reshape((3, 3))
-                t = np.array(transform['t'], dtype=np.float32).reshape((3, 1))
+                t = np.array(transform['t'], dtype=np.float32).reshape((3,))
                 self.transforms[name] = (R, t)
     
     def save_params(self):
@@ -61,6 +52,15 @@ class Camera:
         Save the camera parameters to a YAML file, with all `data:` arrays in
         horizontal (flow) style.
         """
+        class FlowList(list):
+            """A list that PyYAML will emit in [a, b, c] (flow) style."""
+            pass
+
+        def _represent_flow_list(dumper, data):
+            return dumper.represent_sequence('tag:yaml.org,2002:seq', data, flow_style=True)
+
+        yaml.add_representer(FlowList, _represent_flow_list)
+
         yaml_file = os.path.join(CALIBRATION_DIR, f"{self.name}.yaml")
         calib_data = {
             'image_width': self.width,
@@ -133,7 +133,26 @@ class MultiCamCapture:
         Get the images for a given camera.
         """
         return self.images[camera_name]
-
+    
+    def undistort_rectify_images(self):
+        """
+        Rectify the images for each camera.
+        """
+        for cam in self.cameras:
+            for i, img in enumerate(self.images[cam.name]):
+                # Create undistort/rectify map
+                map1, map2 = cv2.initUndistortRectifyMap(
+                    cam.camera_matrix, 
+                    cam.dist_coeffs, 
+                    cam.rectification_matrix, 
+                    cam.projection_matrix, 
+                    (cam.width, cam.height), 
+                    cv2.CV_16SC2
+                )
+                # Rectify the image using the computed maps
+                rectified_image = cv2.remap(img, map1, map2, cv2.INTER_LINEAR)
+                self.images[cam.name][i] = rectified_image
+        return self.images
 
 def project_points(points, colors, intrinsic, extrinsic, width, height):
     """
@@ -148,6 +167,7 @@ def project_points(points, colors, intrinsic, extrinsic, width, height):
         height: Height of the output image.
     Returns:
         image: 2D numpy array of shape (height, width, 3) representing the projected image.
+        z_buffer: 2D numpy array of shape (height, width) representing the depth values.
     """
 
     # Convert points to homogeneous coordinates
@@ -180,7 +200,8 @@ def project_points(points, colors, intrinsic, extrinsic, width, height):
                 if np.max(color) <= 1.0:
                     color = (color*255).astype(np.uint8)
                 image[v, u] = color
-    return image
+
+    return image, z_buffer
 
 def compute_relative_transform(rvec1, tvec1, rvec2, tvec2):
     """

@@ -25,7 +25,7 @@ CAMERA_TOPICS = {
 VALIDITY_WINDOW = 1.0 * 1e9 # nanoseconds
 DEMOSAIC_MODE = True
 RECTIFY_MODE = False
-
+# TODO: Update with utils functions and classes
 
 class CaptureRequest:
     def __init__(self, start_time: int, duration: int) -> None:
@@ -196,7 +196,6 @@ class MultiCamBagReader:
         else:
             print("Request expired before all images were received.")
         self.active_request = None
-
 
 def main():
 
