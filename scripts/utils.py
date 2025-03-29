@@ -32,6 +32,8 @@ class Camera:
         Load the camera parameters from a YAML file.
         """
         yaml_file = os.path.join(CALIBRATION_DIR, f"{self.name}.yaml")
+        if not os.path.exists(yaml_file):
+            raise FileNotFoundError(f"Calibration file {yaml_file} not found.")
         with open(yaml_file, 'r') as f:
             calib_data = yaml.safe_load(f)
         self.width = int(calib_data['image_width'])
@@ -92,40 +94,26 @@ class Camera:
         os.makedirs(CALIBRATION_DIR, exist_ok=True)
         with open(yaml_file, 'w') as f:
             yaml.dump(calib_data, f, sort_keys=False)
-        
+
 class MultiCamCapture:
-    def __init__(self, cameras: List[Camera], image_set_dir: str):
+    def __init__(self, base_dir: str, cameras: List[Camera], id: str):
         """
         Store the paths to the images for each camera used in a single capture.
         """
+        self.base_dir = base_dir
         self.cameras = cameras
-        self.id = os.path.basename(image_set_dir)
-        self.image_set_dir = image_set_dir
-        self.image_paths: Dict[str, List[str]] = {
-            cam.name: self.get_paths(cam.name) for cam in cameras
+        self.id = id
+        self.image_paths: Dict[str, str] = {
+            cam.name: os.path.join(self.base_dir, cam.name, id + EXTENSION) for cam in cameras
         }
-        self.images: Dict[str, List[np.ndarray]] = {}
-
-    def get_paths(self, camera_name: str) -> List[str]:
-        """
-        Get the paths to the images for a given camera.
-        """
-        # Check for the camera name in the image set dir and determine if it's a file or directory
-        potential_file = os.path.join(self.image_set_dir, camera_name + EXTENSION)
-        potential_dir = os.path.join(self.image_set_dir, camera_name)
-        if os.path.isfile(potential_file):
-            return [potential_file]
-        elif os.path.isdir(potential_dir):
-            return sorted(glob.glob(os.path.join(potential_dir, f"*{EXTENSION}")))
-        else:
-            return []
+        self.images: Dict[str, np.ndarray] = {}
         
-    def load_images(self) -> Dict[str, List[np.ndarray]]:
+    def load_images(self) -> Dict[str, np.ndarray]:
         """
         Load the images from the image paths.
         """
-        for cam_name, paths in self.image_paths.items():
-            self.images[cam_name] = [cv2.imread(path) for path in paths]
+        for cam_name, path in self.image_paths.items():
+            self.images[cam_name] = cv2.imread(path)
         return self.images
     
     def unload_images(self):
@@ -134,10 +122,14 @@ class MultiCamCapture:
         """
         self.images = {}
     
-    def get_images(self, camera_name: str) -> List[np.ndarray]:
+    def get_image(self, camera_name: str) -> np.ndarray:
         """
-        Get the images for a given camera.
+        Get the image for a given camera.
         """
+        if camera_name not in self.images:
+            raise ValueError(f"Camera {camera_name} not found in MultiCamCapture.")
+        if self.images[camera_name] is None:
+            raise ValueError(f"Image for camera {camera_name} is not loaded.")
         return self.images[camera_name]
     
     def undistort_rectify_images(self):
@@ -145,20 +137,48 @@ class MultiCamCapture:
         Rectify the images for each camera.
         """
         for cam in self.cameras:
-            for i, img in enumerate(self.images[cam.name]):
-                # Create undistort/rectify map
-                map1, map2 = cv2.initUndistortRectifyMap(
-                    cam.camera_matrix, 
-                    cam.dist_coeffs, 
-                    cam.rectification_matrix, 
-                    cam.projection_matrix, 
-                    (cam.width, cam.height), 
-                    cv2.CV_16SC2
-                )
-                # Rectify the image using the computed maps
-                rectified_image = cv2.remap(img, map1, map2, cv2.INTER_LINEAR)
-                self.images[cam.name][i] = rectified_image
+            
+            # Create undistort/rectify map
+            map1, map2 = cv2.initUndistortRectifyMap(
+                cam.camera_matrix, 
+                cam.dist_coeffs, 
+                cam.rectification_matrix, 
+                cam.projection_matrix, 
+                (cam.width, cam.height), 
+                cv2.CV_16SC2
+            )
+
+            # Rectify the image using the computed maps
+            img = self.images[cam.name]
+            if img is None:
+                print(f"Warning: No image found for camera {cam.name}.")
+                continue
+            if img.shape[1] != cam.width or img.shape[0] != cam.height:
+                print(f"Warning: Image size {img.shape} does not match camera parameters for {cam.name}.")
+                continue
+            rectified_image = cv2.remap(img, map1, map2, cv2.INTER_LINEAR)
+            self.images[cam.name] = rectified_image
+
         return self.images
+
+def load_multicam_captures(base_dir: str, cameras: List[Camera]) -> List[MultiCamCapture]:
+    """
+    Load multiple camera captures from a base directory.
+    """
+
+    # Find the file ids from the first cameras directory
+    file_ids = [
+        os.path.splitext(filename)[0]
+        for filename in os.listdir(os.path.join(base_dir, cameras[0].name))
+        if filename.endswith(EXTENSION)
+    ]
+
+    # Create the list of MultiCamCapture objects
+    captures = []
+    for file_id in file_ids:
+        captures.append(MultiCamCapture(base_dir, cameras, file_id))
+
+    return captures
 
 def project_points(points, colors, intrinsic, extrinsic, width, height):
     """

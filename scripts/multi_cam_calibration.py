@@ -8,7 +8,7 @@ import numpy as np
 import glob
 from typing import List, Dict, Set
 from scipy.optimize import least_squares
-from utils import Camera, MultiCamCapture
+from utils import Camera, MultiCamCapture, load_multicam_captures
 
 
 class MultiCamCalibration:
@@ -49,12 +49,9 @@ class MultiCamCalibration:
         self.valid_t_vecs: Dict[str, List[np.ndarray]] = {cam.name: [] for cam in cameras}
 
     def add_capture_dir(self, data_dir: str):
-        for subdir in glob.glob(os.path.join(data_dir, "*")):
-            if os.path.isdir(subdir):
-                self.captures.append(MultiCamCapture(self.cameras, subdir))
-        
-        if not self.captures:
-            raise ValueError(f"No valid capture directories found in {data_dir}.")
+        self.captures = load_multicam_captures(data_dir, self.cameras)
+        if self.captures is None or len(self.captures) == 0:
+            raise ValueError(f"No captures found in directory: {data_dir}")
 
     def detect_corners(self):
         """
@@ -72,7 +69,7 @@ class MultiCamCalibration:
 
             # Detect the board and corners for each camera
             for cam in self.cameras:
-                img = capture.get_images(cam.name)[0] # Just using the first image if there are multiple
+                img = capture.get_image(cam.name) # Just using the first image if there are multiple
 
                 # Convert to grayscale if necessary
                 if len(img.shape) == 3:
@@ -307,14 +304,13 @@ def main():
 
     # Compute the intrinsics for each camera
     for cam in cameras:
-        # err = multi_cam_calib.compute_intrinsics(cam)[0]
-        # print(f"Camera {cam.name} intrinsics computed with error {err:.4f}.")
-        # cam.save_params() # Save as we go
-        cam.load_params()
+        err = multi_cam_calib.compute_intrinsics(cam)[0]
+        print(f"Camera {cam.name} intrinsics computed with error {err:.4f}.")
+        cam.save_params()
 
     # Compute the rectification parameters for the stereo pairs
-    err = multi_cam_calib.compute_stereo_rectification(firefly_left, firefly_right)[0]
-    print(f"Stereo rectification between firefly_left and firefly_right computed with error {err:.4f}.")
+    # err = multi_cam_calib.compute_stereo_rectification(firefly_left, firefly_right)[0]
+    # print(f"Stereo rectification between firefly_left and firefly_right computed with error {err:.4f}.")
     # err = multi_cam_calib.compute_stereo_rectification(zed_left, zed_right)[0]
     # print(f"Stereo rectification between zed_left and zed_right computed with error {err:.4f}.")
 
