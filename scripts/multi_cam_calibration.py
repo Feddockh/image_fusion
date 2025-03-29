@@ -6,7 +6,7 @@ import sys
 import cv2
 import numpy as np
 import glob
-from typing import List, Dict
+from typing import List, Dict, Set
 from scipy.optimize import least_squares
 from utils import Camera, MultiCamCapture
 
@@ -33,17 +33,20 @@ class MultiCamCalibration:
             refineParams=refine_params
         )
 
+        self.min_corners = 8
+
         self.captures: List[MultiCamCapture] = []
 
         # 2D image positions of detected ChArUco (chessboard) corners and marker corners
+        self.valid_capture_mask: Dict[str, List[bool]] = {cam.name: [] for cam in cameras}
         self.all_charuco_corners: Dict[str, List[np.ndarray]] = {cam.name: [] for cam in cameras}
         self.all_charuco_ids: Dict[str, List[np.ndarray]] = {cam.name: [] for cam in cameras}
         self.all_marker_corners: Dict[str, List[np.ndarray]] = {cam.name: [] for cam in cameras}
         self.all_marker_ids: Dict[str, List[np.ndarray]] = {cam.name: [] for cam in cameras}
 
         # r_vecs and t_vecs are the rotation and translation vectors for each image
-        self.all_r_vecs: Dict[str, List[np.ndarray]] = {cam.name: [] for cam in cameras}
-        self.all_t_vecs: Dict[str, List[np.ndarray]] = {cam.name: [] for cam in cameras}
+        self.valid_r_vecs: Dict[str, List[np.ndarray]] = {cam.name: [] for cam in cameras}
+        self.valid_t_vecs: Dict[str, List[np.ndarray]] = {cam.name: [] for cam in cameras}
 
     def add_capture_dir(self, data_dir: str):
         for subdir in glob.glob(os.path.join(data_dir, "*")):
@@ -62,7 +65,7 @@ class MultiCamCalibration:
             raise ValueError("No captures have been added to the calibration object.")
 
         # Loop through each capture set and detect the board and corners
-        for capture in self.captures:
+        for i, capture in enumerate(self.captures):
 
             # Load the images for each camera
             capture.load_images()
@@ -89,11 +92,22 @@ class MultiCamCalibration:
                 charuco_corners, charuco_ids, marker_corners, marker_ids = self.charuco_detector.detectBoard(gray)
 
                 # Only store detections if enough corners were found
-                if charuco_ids is not None and len(charuco_ids) > 0:
+                if charuco_ids is not None and len(charuco_ids) >= self.min_corners:
+                    self.valid_capture_mask[cam.name].append(True)
                     self.all_charuco_corners[cam.name].append(charuco_corners)
                     self.all_charuco_ids[cam.name].append(charuco_ids)
                     self.all_marker_corners[cam.name].append(marker_corners)
                     self.all_marker_ids[cam.name].append(marker_ids)
+                else:
+                    self.valid_capture_mask[cam.name].append(False)
+                    self.all_charuco_corners[cam.name].append(np.array([]))
+                    self.all_charuco_ids[cam.name].append(np.array([]))
+                    self.all_marker_corners[cam.name].append(np.array([]))
+                    self.all_marker_ids[cam.name].append(np.array([]))
+
+            # Unload the images to save memory
+            capture.unload_images()
+            print(f"Capture {i+1}/{len(self.captures)}")
 
     def compute_intrinsics(self, camera: Camera):
         """
@@ -102,11 +116,14 @@ class MultiCamCalibration:
         if len(self.all_charuco_corners[camera.name]) == 0:
             print(f"Warning: No detections for camera {camera.name}. Skipping calibration.")
             return
-
-        # Calibrate the camera
+        
+        # Calibrate the camera (filter out empty detections)
+        mask = self.valid_capture_mask[camera.name]
+        valid_corners = [c for c, valid in zip(self.all_charuco_corners[camera.name], mask) if valid]
+        valid_ids = [i for i, valid in zip(self.all_charuco_ids[camera.name], mask) if valid]
         err, camera_matrix, dist_coeffs, rvecs, tvecs = cv2.aruco.calibrateCameraCharuco(
-            charucoCorners=self.all_charuco_corners[camera.name],
-            charucoIds=self.all_charuco_ids[camera.name],
+            charucoCorners=valid_corners,
+            charucoIds=valid_ids,
             board=self.charuco_board,
             imageSize=(camera.width, camera.height),
             cameraMatrix=None,
@@ -117,8 +134,11 @@ class MultiCamCalibration:
         camera.error = err
         camera.camera_matrix = camera_matrix
         camera.dist_coeffs = dist_coeffs
-        self.all_r_vecs[camera.name] = rvecs
-        self.all_t_vecs[camera.name] = tvecs
+
+        # Maintain indexing from the original list
+        rvecs, tvecs = list(rvecs), list(tvecs)
+        self.valid_r_vecs[camera.name] = [rvecs.pop(0) if mask[i] else np.array([]) for i in range(len(mask))]
+        self.valid_t_vecs[camera.name] = [tvecs.pop(0) if mask[i] else np.array([]) for i in range(len(mask))]
 
         # Set the projection matrix to the camera matrix for now, will be updated later if stereo camera
         camera.projection_matrix[:3, :3] = camera_matrix 
@@ -141,13 +161,17 @@ class MultiCamCalibration:
         capture_img_pts1 = []
         for cam0_pts, cam0_ids, cam1_pts, cam1_ids in zip(self.all_charuco_corners[camera0.name], self.all_charuco_ids[camera0.name],
                                                           self.all_charuco_corners[camera1.name], self.all_charuco_ids[camera1.name]):
+            
+            # Skip empty/invalid detections
+            if len(cam0_pts) < self.min_corners or len(cam1_pts) < self.min_corners:
+                continue
 
             # Match the object points (3D coordinates relative to the ChAruCo board) and image points (2D pixel coordinates)
             obj_pts0, img_pts0 = self.charuco_board.matchImagePoints(detectedCorners=cam0_pts, detectedIds=cam0_ids)
             obj_pts1, img_pts1 = self.charuco_board.matchImagePoints(detectedCorners=cam1_pts, detectedIds=cam1_ids)
 
             # Find the common object points and image points
-            _, common_idx0, common_idx1 = np.intersect1d(cam0_ids, cam1_ids, return_indices=True)
+            _, common_idx0, common_idx1 = np.intersect1d(cam0_ids.flatten(), cam1_ids.flatten(), return_indices=True)
             aligned_obj = obj_pts0[common_idx0]
             aligned_img0 = img_pts0[common_idx0]
             aligned_img1 = img_pts1[common_idx1]
@@ -166,9 +190,9 @@ class MultiCamCalibration:
             distCoeffs1=camera0.dist_coeffs,
             cameraMatrix2=camera1.camera_matrix,
             distCoeffs2=camera1.dist_coeffs,
-            imageSize=(camera0.width, camera0.height),
-            criteria=(cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_COUNT, 100, 1e-5),
-            flags=cv2.CALIB_FIX_INTRINSIC
+            imageSize=(camera0.width, camera0.height)
+            # criteria=(cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_COUNT, 100, 1e-5),
+            # flags=cv2.CALIB_FIX_INTRINSIC
         )
 
         # Stereo‑rectify → get R1, R2, P1, P2, Q
@@ -203,10 +227,14 @@ class MultiCamCalibration:
             t = x[3:6].reshape(3, 1)
             residual_list = []
             for r_vec0, t_vec0, r_vec1, t_vec1 in zip(
-                    self.all_r_vecs[camera0.name], 
-                    self.all_t_vecs[camera0.name], 
-                    self.all_r_vecs[camera1.name], 
-                    self.all_t_vecs[camera1.name]):
+                    self.valid_r_vecs[camera0.name], 
+                    self.valid_t_vecs[camera0.name], 
+                    self.valid_r_vecs[camera1.name], 
+                    self.valid_t_vecs[camera1.name]):
+                
+                # Skip empty/invalid detections
+                if r_vec0.size == 0 or r_vec1.size == 0:
+                    continue
                 
                 R0 = cv2.Rodrigues(r_vec0)[0]
                 R1 = cv2.Rodrigues(r_vec1)[0]
@@ -279,24 +307,42 @@ def main():
 
     # Compute the intrinsics for each camera
     for cam in cameras:
-        err = multi_cam_calib.compute_intrinsics(cam)[0]
-        print(f"Camera {cam.name} intrinsics computed with error {err:.4f}.")
+        # err = multi_cam_calib.compute_intrinsics(cam)[0]
+        # print(f"Camera {cam.name} intrinsics computed with error {err:.4f}.")
+        # cam.save_params() # Save as we go
+        cam.load_params()
 
-    # Compute the extrinsics between the ximea and firefly_left cameras
-    err = multi_cam_calib.compute_extrinsics(ximea, firefly_left)[0]
-    print(f"Extrinsics between ximea and firefly_left computed with error {err:.4f}.")
-
-    # Compute the stereo rectification between the firefly_left and firefly_right cameras
+    # Compute the rectification parameters for the stereo pairs
     err = multi_cam_calib.compute_stereo_rectification(firefly_left, firefly_right)[0]
     print(f"Stereo rectification between firefly_left and firefly_right computed with error {err:.4f}.")
+    # err = multi_cam_calib.compute_stereo_rectification(zed_left, zed_right)[0]
+    # print(f"Stereo rectification between zed_left and zed_right computed with error {err:.4f}.")
 
-    # Compute the stereo rectification between the zed_left and zed_right cameras
-    err = multi_cam_calib.compute_stereo_rectification(zed_left, zed_right)[0]
-    print(f"Stereo rectification between zed_left and zed_right computed with error {err:.4f}.")
+    # # Compute the extrinsics between the firefly_left and all other cameras
+    # err = multi_cam_calib.compute_extrinsics(firefly_left, firefly_right)[0]
+    # print(f"Extrinsics between firefly_left and firefly_right computed with error {err:.4f}.")
+    # err = multi_cam_calib.compute_extrinsics(firefly_left, ximea)[0]
+    # print(f"Extrinsics between firefly_left and ximea computed with error {err:.4f}.")
+    # err = multi_cam_calib.compute_extrinsics(firefly_left, zed_left)[0]
+    # print(f"Extrinsics between firefly_left and zed_left computed with error {err:.4f}.")
+    # err = multi_cam_calib.compute_extrinsics(firefly_left, zed_right)[0]
+    # print(f"Extrinsics between firefly_left and zed_right computed with error {err:.4f}.")
+    # firefly_left.save_params() # Save as we go
+
+    # # Compute the extrinsics between the ximea and all other cameras
+    # err = multi_cam_calib.compute_extrinsics(ximea, firefly_left)[0]
+    # print(f"Extrinsics between ximea and firefly_left computed with error {err:.4f}.")
+    # err = multi_cam_calib.compute_extrinsics(ximea, firefly_right)[0]
+    # print(f"Extrinsics between ximea and firefly_right computed with error {err:.4f}.")
+    # err = multi_cam_calib.compute_extrinsics(ximea, zed_left)[0]
+    # print(f"Extrinsics between ximea and zed_left computed with error {err:.4f}.")
+    # err = multi_cam_calib.compute_extrinsics(ximea, zed_right)[0]
+    # print(f"Extrinsics between ximea and zed_right computed with error {err:.4f}.")
+    # ximea.save_params() # Save as we go
 
     # Save the camera calibrations
-    # for cam in cameras:
-        # cam.save_params()
+    for cam in cameras:
+        cam.save_params()
 
 if __name__ == "__main__":
     main()

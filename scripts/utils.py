@@ -128,6 +128,12 @@ class MultiCamCapture:
             self.images[cam_name] = [cv2.imread(path) for path in paths]
         return self.images
     
+    def unload_images(self):
+        """
+        Unload the images to free up memory.
+        """
+        self.images = {}
+    
     def get_images(self, camera_name: str) -> List[np.ndarray]:
         """
         Get the images for a given camera.

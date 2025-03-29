@@ -23,7 +23,7 @@ CAMERA_TOPICS = {
     "zed_right":     "/multi_cam_rig/zed/right_image"
 }
 VALIDITY_WINDOW = 1.0 * 1e9 # nanoseconds
-DEMOSAIC_MODE = False
+DEMOSAIC_MODE = True
 RECTIFY_MODE = False
 # TODO: Update with utils functions and classes
 
