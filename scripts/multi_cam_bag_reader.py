@@ -23,9 +23,8 @@ CAMERA_TOPICS = {
     "zed_right":     "/multi_cam_rig/zed/right_image"
 }
 VALIDITY_WINDOW = 1.0 * 1e9 # nanoseconds
-DEMOSAIC_MODE = True
+DEMOSAIC_MODE = False # May remove and perform demosaicing later
 RECTIFY_MODE = False
-# TODO: Update with utils functions and classes
 
 class CaptureRequest:
     def __init__(self, start_time: int, duration: int) -> None:
@@ -67,24 +66,21 @@ class CaptureRequest:
         # Create a subdirectory for the request (should not already exist)
         seconds = int(self.start_time // 1e9)
         nano_seconds = int(self.start_time % 1e9)
-        output_dir = os.path.join(output_dir, f"{seconds}_{nano_seconds}")
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir, exist_ok=False)
 
         # Write each image to the output directory
         for camera_name, image in self.images_received.items():
+
+            cam_dir = os.path.join(output_dir, camera_name)
+            if not os.path.exists(cam_dir):
+                os.makedirs(cam_dir, exist_ok=True)
 
             # Demosaic the image if necessary
             if camera_name == "ximea":
                 if DEMOSAIC_MODE:
                     hypercube_dict = demosaic_ximea_5x5(image, sort_bands=False)
 
-                    # Create a directory for the ximea images
-                    band_dir = os.path.join(output_dir, f"{camera_name}")
-                    if not os.path.exists(band_dir):
-                        os.makedirs(band_dir, exist_ok=False)
-
                     # Write each band to the output directory
+                    # TODO: May remove this and perform demosaicing later
                     for band, band_image in hypercube_dict.items():
 
                         # Rectify the image if necessary
@@ -92,12 +88,12 @@ class CaptureRequest:
                             calibration_file = os.path.join(CALIBRATION_DIR, f"{camera_name}.yaml")
                             band_image = rectify_image(band_image, calibration_file)
 
-                        output_file = os.path.join(band_dir, f"{band}.png")
+                        output_file = os.path.join(cam_dir, f"{seconds}_{nano_seconds}_{band}.png")
                         cv2.imwrite(output_file, band_image)
 
                 # If not demosaicing, save the grayscale image
                 else:
-                    output_file = os.path.join(output_dir, f"{camera_name}.png")
+                    output_file = os.path.join(cam_dir, f"{seconds}_{nano_seconds}.png")
                     cv2.imwrite(output_file, image)
 
             # Save the image as is for other cameras
@@ -108,10 +104,10 @@ class CaptureRequest:
                     calibration_file = os.path.join(CALIBRATION_DIR, f"{camera_name}.yaml")
                     image = rectify_image(image, calibration_file)
                 
-                output_file = os.path.join(output_dir, f"{camera_name}.png")
+                output_file = os.path.join(cam_dir, f"{seconds}_{nano_seconds}.png")
                 cv2.imwrite(output_file, image)
 
-        print(f"Saved images to: {output_dir}")
+        print(f"Saved images to: {cam_dir}/{seconds}_{nano_seconds}_*.png")
     
 class MultiCamBagReader:
     def __init__(self, output_dir: str) -> None:
